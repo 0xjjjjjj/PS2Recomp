@@ -285,6 +285,12 @@ namespace ps2_syscalls
         case static_cast<uint32_t>(-0x78):
             ps2_stubs::sceSifSetDChain(rdram, ctx, runtime);
             return true;
+        case 0x83:
+            FindAddress(rdram, ctx, runtime);
+            return true;
+        case 0x84:
+            MaxFreeMemSize(rdram, ctx, runtime);
+            return true;
         case 0x85:
             SetMemoryMode(rdram, ctx, runtime);
             return true;
@@ -297,6 +303,30 @@ namespace ps2_syscalls
 #include "syscalls/ps2_syscalls_flags.inl"
 #include "syscalls/ps2_syscalls_rpc.inl"
 #include "syscalls/ps2_syscalls_fileio.inl"
+
+    void dispatchDmacForChannel(uint8_t *rdram, PS2Runtime *runtime, uint32_t channelBase)
+    {
+        // Map channelBase to cause index (position in kDmaChannelBases array).
+        constexpr std::array<uint32_t, 10> kDmacBases = {
+            0x10008000u, 0x10009000u, 0x1000A000u, 0x1000B000u, 0x1000B400u,
+            0x1000C000u, 0x1000C400u, 0x1000C800u, 0x1000D000u, 0x1000D400u};
+
+        uint32_t cause = UINT32_MAX;
+        for (uint32_t i = 0; i < kDmacBases.size(); ++i)
+        {
+            if (kDmacBases[i] == channelBase)
+            {
+                cause = i;
+                break;
+            }
+        }
+        if (cause == UINT32_MAX)
+        {
+            return;
+        }
+
+        dispatchDmacHandlersForCause(rdram, runtime, cause);
+    }
 
     void notifyRuntimeStop()
     {

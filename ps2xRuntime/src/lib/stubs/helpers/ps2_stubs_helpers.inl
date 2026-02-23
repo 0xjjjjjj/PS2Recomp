@@ -1425,17 +1425,27 @@ namespace
         mem.writeIORegister(channelBase + 0x30u, tadr);
         mem.writeIORegister(channelBase + 0x00u, chcr);
 
-        std::lock_guard<std::mutex> lock(g_dmaStubMutex);
-        g_dmaPendingPolls[channelBase] = 1;
-        if (g_dmaStubLogCount < kMaxDmaStubLogs)
+        // DMA completes instantly — clear STR bit so recompiled code polling
+        // CHCR doesn't spin forever.  On real PS2, hardware clears STR on completion.
+        mem.writeIORegister(channelBase + 0x00u, chcr & ~0x100u);
+
         {
-            std::cout << "[sceDmaSend] ch=0x" << std::hex << channelBase
-                      << " madr=0x" << madr
-                      << " qwc=0x" << qwc
-                      << " tadr=0x" << tadr
-                      << " chcr=0x" << chcr << std::dec << std::endl;
-            ++g_dmaStubLogCount;
+            std::lock_guard<std::mutex> lock(g_dmaStubMutex);
+            g_dmaPendingPolls[channelBase] = 1;
+            if (g_dmaStubLogCount < kMaxDmaStubLogs)
+            {
+                std::cout << "[sceDmaSend] ch=0x" << std::hex << channelBase
+                          << " madr=0x" << madr
+                          << " qwc=0x" << qwc
+                          << " tadr=0x" << tadr
+                          << " chcr=0x" << chcr << std::dec << std::endl;
+                ++g_dmaStubLogCount;
+            }
         }
+
+        // DMA completes instantly in this runtime — dispatch registered DMAC
+        // interrupt handlers so the engine's completion semaphore gets signaled.
+        ps2_syscalls::dispatchDmacForChannel(rdram, runtime, channelBase);
 
         return 0;
     }

@@ -51,6 +51,12 @@ target_include_directories(ps2_runtime PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# SSE4.1 required for _mm_extract_epi32 in ps2_runtime_macros.h
+if(NOT MSVC AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
+    target_compile_options(ps2_runtime PRIVATE -msse4.1)
+    target_compile_options(ps2EntryRunner PRIVATE -msse4.1)
+endif()
+
 target_link_libraries(ps2_runtime PRIVATE raylib)
 target_link_libraries(ps2EntryRunner
     PRIVATE

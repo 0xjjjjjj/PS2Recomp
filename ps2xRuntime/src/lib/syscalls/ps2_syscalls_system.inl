@@ -345,3 +345,19 @@ void RegisterExitHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
     setReturnS32(ctx, 0);
 }
+
+// 0x83 FindAddress: kernel memory management — searches for a free address range.
+// Called during CRT startup to locate heap/stack regions.
+// Stub: return the requested start address as-is (memory is pre-mapped in native port).
+void FindAddress(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    uint32_t addr = getRegU32(ctx, 4); // $a0 = start address to search from
+    setReturnU32(ctx, addr);
+}
+
+// 0x84 MaxFreeMemSize: returns size of largest free memory block.
+// CRT may call this to determine available heap. Return all of user RAM.
+void MaxFreeMemSize(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    setReturnU32(ctx, PS2_RAM_SIZE); // 32 MB
+}

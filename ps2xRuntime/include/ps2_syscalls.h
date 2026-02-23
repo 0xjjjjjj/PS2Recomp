@@ -20,6 +20,7 @@ namespace ps2_syscalls
     bool dispatchNumericSyscall(uint32_t syscallNumber, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void TODO(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t encodedSyscallId);
     void notifyRuntimeStop();
+    void dispatchDmacForChannel(uint8_t *rdram, PS2Runtime *runtime, uint32_t channelBase);
 }
 
 #endif // PS2_SYSCALLS_H

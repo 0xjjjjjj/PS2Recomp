@@ -41,6 +41,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
             message(STATUS "Crypto and CRC extensions enabled")
         endif()
     endif()
+else()
+    # x86_64: SSE4.1 required for _mm_extract_epi32 in ps2_runtime headers
+    if(NOT MSVC)
+        add_compile_options(-msse4.1)
+    endif()
 endif()
 
 add_subdirectory("ps2xRecomp")

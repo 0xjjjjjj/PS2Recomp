@@ -126,6 +126,80 @@ static void dispatchIntcHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, ui
     }
 }
 
+static void dispatchDmacHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, uint32_t cause)
+{
+    if (!rdram || !runtime)
+    {
+        return;
+    }
+
+    std::vector<IrqHandlerInfo> handlers;
+    {
+        std::lock_guard<std::mutex> lock(g_irq_handler_mutex);
+        if (cause < 32u && (g_enabled_dmac_mask & (1u << cause)) == 0u)
+        {
+            return;
+        }
+
+        handlers.reserve(g_dmacHandlers.size());
+        for (const auto &[id, info] : g_dmacHandlers)
+        {
+            (void)id;
+            if (!info.enabled)
+            {
+                continue;
+            }
+            if (info.cause != cause)
+            {
+                continue;
+            }
+            if (info.handler == 0u)
+            {
+                continue;
+            }
+            handlers.push_back(info);
+        }
+    }
+
+    for (const IrqHandlerInfo &info : handlers)
+    {
+        if (!runtime->hasFunction(info.handler))
+        {
+            continue;
+        }
+
+        try
+        {
+            R5900Context irqCtx{};
+            const uint32_t sp = (info.sp != 0u) ? info.sp : (PS2_RAM_SIZE - 0x10u);
+            SET_GPR_U32(&irqCtx, 28, info.gp);
+            SET_GPR_U32(&irqCtx, 29, sp);
+            SET_GPR_U32(&irqCtx, 31, 0u);
+            SET_GPR_U32(&irqCtx, 4, cause);
+            SET_GPR_U32(&irqCtx, 5, info.arg);
+            SET_GPR_U32(&irqCtx, 6, 0u);
+            SET_GPR_U32(&irqCtx, 7, 0u);
+            irqCtx.pc = info.handler;
+
+            PS2Runtime::RecompiledFunction func = runtime->lookupFunction(info.handler);
+            func(rdram, &irqCtx, runtime);
+        }
+        catch (const ThreadExitException &)
+        {
+        }
+        catch (const std::exception &e)
+        {
+            static uint32_t warnCount = 0;
+            if (warnCount < 8u)
+            {
+                std::cerr << "[DMAC] handler 0x" << std::hex << info.handler
+                          << " threw exception: " << e.what() << std::dec << std::endl;
+                ++warnCount;
+            }
+        }
+    }
+}
+
 static void signalVSyncFlag(uint8_t *rdram, uint64_t tickValue)
 {
     VSyncFlagRegistration reg{};

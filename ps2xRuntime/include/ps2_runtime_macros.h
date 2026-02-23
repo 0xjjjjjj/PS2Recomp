@@ -1,6 +1,7 @@
 #ifndef PS2_RUNTIME_MACROS_H
 #define PS2_RUNTIME_MACROS_H
 #include <cstdint>
+#include <cmath>
 #include <bit>
 #if defined(_MSC_VER)
 #include <intrin.h>

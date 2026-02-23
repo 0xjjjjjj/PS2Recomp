@@ -50,8 +50,9 @@ void FlushCache(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
 void ResetEE(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    std::cerr << "Syscall: ResetEE - requesting runtime stop" << std::endl;
-    runtime->requestStop();
+    // No-op: PS2 games call ResetEE during boot to reconfigure the processor.
+    // On native execution this is meaningless. The original vendor code called
+    // requestStop() here which caused an infinite loop in the _start function.
     setReturnS32(ctx, KE_OK);
 }
 
