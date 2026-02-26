@@ -376,7 +376,6 @@ void fioRmdir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
 void fioGetstat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    // we wont implement this for now.
     uint32_t pathAddr = getRegU32(ctx, 4);    // $a0
     uint32_t statBufAddr = getRegU32(ctx, 5); // $a1
 
@@ -399,12 +398,43 @@ void fioGetstat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     std::string hostPath = translatePs2Path(ps2Path);
     if (hostPath.empty())
     {
-        std::cerr << "fioGetstat error: Bad path translate" << std::endl;
+        std::cerr << "fioGetstat: path not found '" << ps2Path << "'" << std::endl;
         setReturnS32(ctx, -1);
         return;
     }
 
-    setReturnS32(ctx, -1);
+    std::error_code ec;
+    std::filesystem::file_status fstatus = std::filesystem::status(hostPath, ec);
+    if (ec || !std::filesystem::exists(fstatus))
+    {
+        std::cerr << "fioGetstat: not found '" << hostPath << "'" << std::endl;
+        setReturnS32(ctx, -1);
+        return;
+    }
+
+    io_stat_t stat{};
+
+    if (std::filesystem::is_directory(fstatus))
+    {
+        stat.mode = kFioSoIfDir | kFioSoIROth | kFioSoIXOth;
+    }
+    else if (std::filesystem::is_regular_file(fstatus))
+    {
+        stat.mode = kFioSoIfReg | kFioSoIROth;
+        uint64_t sz = std::filesystem::file_size(hostPath, ec);
+        if (!ec)
+        {
+            stat.size = static_cast<uint32_t>(sz & 0xFFFFFFFFu);
+            stat.hisize = static_cast<uint32_t>(sz >> 32);
+        }
+    }
+    else
+    {
+        stat.mode = kFioSoIROth;
+    }
+
+    std::memcpy(ps2StatBuf, &stat, sizeof(io_stat_t));
+    setReturnS32(ctx, 0);
 }
 
 void fioRemove(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

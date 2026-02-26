@@ -118,6 +118,26 @@ namespace
         }
         if (!paths.elfDirectory.empty())
         {
+            std::error_code ec;
+            // Check if elfDirectory itself contains SYSTEM.CNF (disc root = elfDirectory)
+            if (std::filesystem::exists(paths.elfDirectory / "SYSTEM.CNF", ec) && !ec)
+            {
+                return paths.elfDirectory;
+            }
+            // Check subdirectories for SYSTEM.CNF (e.g. bin/disc/)
+            for (auto &entry : std::filesystem::directory_iterator(paths.elfDirectory, ec))
+            {
+                if (ec)
+                    break;
+                if (!entry.is_directory(ec) || ec)
+                    continue;
+                std::error_code ec2;
+                if (std::filesystem::exists(entry.path() / "SYSTEM.CNF", ec2) && !ec2)
+                {
+                    std::cerr << "[cdRoot] auto-detected disc root: " << entry.path().string() << std::endl;
+                    return entry.path();
+                }
+            }
             return paths.elfDirectory;
         }
 
@@ -432,6 +452,7 @@ namespace
             {
                 path = resolvedCasePath;
                 ec.clear();
+                std::cerr << "[registerCdFile] case-insensitive: '" << ps2Path << "' -> " << path.string() << std::endl;
             }
             else
             {
@@ -442,13 +463,19 @@ namespace
                 {
                     path = it->second;
                     ec.clear();
+                    std::cerr << "[registerCdFile] leaf-fallback: '" << ps2Path << "' -> " << path.string() << std::endl;
                 }
                 else
                 {
+                    std::cerr << "[registerCdFile] FAILED: '" << ps2Path << "' root=" << root.string() << " tried=" << path.string() << std::endl;
                     g_lastCdError = -1;
                     return false;
                 }
             }
+        }
+        else
+        {
+            std::cerr << "[registerCdFile] direct: '" << ps2Path << "' -> " << path.string() << std::endl;
         }
 
         // For directories, use a synthetic size (ISO9660 directory record size).
