@@ -1,3 +1,11 @@
+// ---------------------------------------------------------------------------
+// Guest execution mutex — serializes all guest code execution.
+// PS2 EE is single-core; threads are cooperative. Native threads sharing
+// rdram must hold this mutex while executing guest code. Release before
+// blocking (WaitSema, SleepThread) and reacquire after waking.
+// ---------------------------------------------------------------------------
+static std::mutex g_guest_exec_mutex;
+
 std::unordered_map<int, FILE *> g_fileDescriptors;
 int g_nextFd = 3; // Start after stdin, stdout, stderr
 

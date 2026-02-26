@@ -165,6 +165,7 @@
     X(strcasecmp)                             \
     X(strcat)                                 \
     X(strchr)                                 \
+    X(strtod)                                 \
     X(strcmp)                                 \
     X(strcpy)                                 \
     X(strlen)                                 \

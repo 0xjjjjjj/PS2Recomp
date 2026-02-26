@@ -20,6 +20,11 @@ namespace
     static uint32_t g_enabled_dmac_mask = 0xFFFFFFFFu;
     static uint64_t g_vsync_tick_counter = 0u;
     static VSyncFlagRegistration g_vsync_registration{};
+
+    // Cooperative VBlank: timer thread increments this, main dispatch loop
+    // drains it via pollVBlank().  Models PS2 where interrupts fire on the
+    // same core at instruction boundaries.
+    static std::atomic<int> g_vblank_pending{0};
 }
 
 static void writeGuestU32NoThrow(uint8_t *rdram, uint32_t addr, uint32_t value)
@@ -97,7 +102,7 @@ static void dispatchIntcHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, ui
         try
         {
             R5900Context irqCtx{};
-            const uint32_t sp = (info.sp != 0u) ? info.sp : (PS2_RAM_SIZE - 0x10u);
+            const uint32_t sp = (info.sp != 0u) ? info.sp : PS2_IRQ_STACK_TOP;
             SET_GPR_U32(&irqCtx, 28, info.gp);
             SET_GPR_U32(&irqCtx, 29, sp);
             SET_GPR_U32(&irqCtx, 31, 0u);
@@ -161,17 +166,27 @@ static void dispatchDmacHandlersForCause(uint8_t *rdram, PS2Runtime *runtime, ui
         }
     }
 
+    if (handlers.empty())
+    {
+        std::cerr << "[DMAC] no handlers for cause=" << cause << std::endl;
+    }
+
     for (const IrqHandlerInfo &info : handlers)
     {
         if (!runtime->hasFunction(info.handler))
         {
+            std::cerr << "[DMAC] handler 0x" << std::hex << info.handler
+                      << " NOT FOUND in runtime (cause=" << std::dec << cause << ")" << std::endl;
             continue;
         }
 
         try
         {
+            std::cerr << "[DMAC] dispatching handler 0x" << std::hex << info.handler
+                      << " cause=" << std::dec << cause
+                      << " arg=0x" << std::hex << info.arg << std::dec << std::endl;
             R5900Context irqCtx{};
-            const uint32_t sp = (info.sp != 0u) ? info.sp : (PS2_RAM_SIZE - 0x10u);
+            const uint32_t sp = (info.sp != 0u) ? info.sp : PS2_IRQ_STACK_TOP;
             SET_GPR_U32(&irqCtx, 28, info.gp);
             SET_GPR_U32(&irqCtx, 29, sp);
             SET_GPR_U32(&irqCtx, 31, 0u);
@@ -243,21 +258,65 @@ static void interruptWorkerMain(uint8_t *rdram, PS2Runtime *runtime)
             continue;
         }
 
-        for (int i = 0; i < ticksToProcess; ++i)
-        {
-            uint64_t tickValue = 0u;
-            {
-                std::lock_guard<std::mutex> lock(g_vsync_flag_mutex);
-                tickValue = ++g_vsync_tick_counter;
-            }
+        // Just set the pending count — INTC dispatch happens on the main
+        // thread via pollVBlank(), matching how real PS2 fires interrupts
+        // on the same core at instruction boundaries.
+        g_vblank_pending.fetch_add(ticksToProcess, std::memory_order_release);
 
-            signalVSyncFlag(rdram, tickValue);
-            dispatchIntcHandlersForCause(rdram, runtime, kIntcVblankStart);
-            dispatchIntcHandlersForCause(rdram, runtime, kIntcVblankEnd);
+        static uint32_t timerLog = 0;
+        ++timerLog;
+        if (timerLog <= 20 || (timerLog % 120) == 0)
+        {
+            std::cerr << "[VBlankTimer] tick#" << timerLog
+                      << " added=" << ticksToProcess
+                      << " pending=" << g_vblank_pending.load() << std::endl;
         }
     }
 
+    std::cerr << "[VBlankTimer] EXITING! stop="
+              << g_irq_worker_stop.load()
+              << " stopReq=" << (runtime ? runtime->isStopRequested() : -1)
+              << std::endl;
     g_irq_worker_running.store(false, std::memory_order_release);
+}
+
+// Called from the main dispatch loop (same thread as guest code).
+// Drains pending VBlank ticks and dispatches INTC handlers inline.
+// No mutex needed — this runs on the main thread which already owns
+// the guest execution context.
+static void pollVBlankInline(uint8_t *rdram, PS2Runtime *runtime)
+{
+    int pending = g_vblank_pending.exchange(0, std::memory_order_acquire);
+    if (pending <= 0)
+    {
+        return;
+    }
+
+    // Cap catchup to avoid huge bursts after long mutex holds
+    if (pending > kMaxCatchupTicks)
+    {
+        pending = kMaxCatchupTicks;
+    }
+
+    static uint32_t pollLog = 0;
+    ++pollLog;
+
+    for (int i = 0; i < pending; ++i)
+    {
+        uint64_t tickValue = 0u;
+        {
+            std::lock_guard<std::mutex> lock(g_vsync_flag_mutex);
+            tickValue = ++g_vsync_tick_counter;
+        }
+        signalVSyncFlag(rdram, tickValue);
+        if (pollLog <= 30 || (pollLog % 60) == 0)
+        {
+            std::cerr << "[pollVBlank] tick=" << tickValue
+                      << " pending=" << pending << std::endl;
+        }
+        dispatchIntcHandlersForCause(rdram, runtime, kIntcVblankStart);
+        dispatchIntcHandlersForCause(rdram, runtime, kIntcVblankEnd);
+    }
 }
 
 static void ensureInterruptWorkerRunning(uint8_t *rdram, PS2Runtime *runtime)
@@ -340,7 +399,7 @@ void AddIntcHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     info.handler = getRegU32(ctx, 5);
     info.arg = getRegU32(ctx, 7);
     info.gp = getRegU32(ctx, 28);
-    info.sp = getRegU32(ctx, 29);
+    info.sp = 0;  // Use dedicated IRQ stack, not caller's stack
     info.enabled = true;
 
     int handlerId = 0;
@@ -349,6 +408,11 @@ void AddIntcHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         handlerId = g_nextIntcHandlerId++;
         g_intcHandlers[handlerId] = info;
     }
+
+    std::cerr << "[AddIntcHandler] id=" << handlerId
+              << " cause=" << info.cause
+              << " handler=0x" << std::hex << info.handler
+              << " arg=0x" << info.arg << std::dec << std::endl;
 
     ensureInterruptWorkerRunning(rdram, runtime);
     setReturnS32(ctx, handlerId);
@@ -372,7 +436,7 @@ void AddDmacHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     info.handler = getRegU32(ctx, 5);
     info.arg = getRegU32(ctx, 7);
     info.gp = getRegU32(ctx, 28);
-    info.sp = getRegU32(ctx, 29);
+    info.sp = 0;  // Use dedicated IRQ stack, not caller's stack
     info.enabled = true;
 
     int handlerId = 0;
@@ -381,6 +445,10 @@ void AddDmacHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         handlerId = g_nextDmacHandlerId++;
         g_dmacHandlers[handlerId] = info;
     }
+    std::cerr << "[AddDmacHandler] id=" << handlerId
+              << " cause=" << info.cause
+              << " handler=0x" << std::hex << info.handler
+              << " arg=0x" << info.arg << std::dec << std::endl;
     setReturnS32(ctx, handlerId);
 }
 

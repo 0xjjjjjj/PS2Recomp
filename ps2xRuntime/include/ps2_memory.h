@@ -20,6 +20,11 @@ constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignmen
 constexpr uint32_t PS2_RAM_BASE = 0x00000000;          // Physical base of RDRAM
 constexpr uint32_t PS2_SCRATCHPAD_BASE = 0x70000000;
 constexpr uint32_t PS2_SCRATCHPAD_SIZE = 16u * 1024u;  // 16KB
+
+// Interrupt handler stack — must NOT overlap the main thread stack (top of RAM).
+// Main thread stack typically occupies the top 256KB (0x01FC0000-0x02000000).
+// Place the IRQ stack 512KB below RAM top to avoid any collision.
+constexpr uint32_t PS2_IRQ_STACK_TOP = PS2_RAM_SIZE - 0x80000u - 0x10u;  // 0x01F7FFF0
 constexpr uint32_t PS2_IO_BASE = 0x10000000;           // Base for many I/O regs (Timers, DMAC, INTC)
 constexpr uint32_t PS2_IO_SIZE = 0x10000;              // 64KB
 constexpr uint32_t PS2_BIOS_BASE = 0x1FC00000;         // Or BFC00000 depending on KSEG

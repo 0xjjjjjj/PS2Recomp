@@ -298,6 +298,9 @@ void sceGsSwapDBuffDc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
 void sceGsSyncPath(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
+    // On real PS2, this blocks until the GIF/VIF/VU DMA paths are idle.
+    // DMA completes instantly in headless mode — just return success.
+    // VBlank is polled at WaitSema and between dispatch loop iterations.
     setReturnS32(ctx, 0);
 }
 

@@ -5,6 +5,7 @@
 #include "ps2_call_list.h"
 #include <mutex>
 #include <atomic>
+#include <thread>
 
 // Number of active host threads spawned for PS2 thread emulation
 extern std::atomic<int> g_activeThreads;
@@ -21,6 +22,20 @@ namespace ps2_syscalls
     void TODO(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t encodedSyscallId);
     void notifyRuntimeStop();
     void dispatchDmacForChannel(uint8_t *rdram, PS2Runtime *runtime, uint32_t channelBase);
+
+    // Drain pending VBlank ticks and dispatch INTC handlers inline.
+    // Must be called from the main dispatch loop (same thread as guest code).
+    void pollVBlank(uint8_t *rdram, PS2Runtime *runtime);
+
+    // Register the calling thread as the main dispatch thread.
+    // Only the main thread polls VBlank in cooperative WaitSema.
+    void setMainThread();
+    bool isMainThread();
+
+    // Guest execution mutex — serializes guest code on shared rdram.
+    // PS2 EE is single-core; all guest threads must hold this while running.
+    // Release before blocking waits, reacquire after waking.
+    std::mutex& getGuestExecMutex();
 }
 
 #endif // PS2_SYSCALLS_H

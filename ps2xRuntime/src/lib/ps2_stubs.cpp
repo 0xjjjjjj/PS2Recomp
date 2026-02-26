@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <filesystem>
 #include <mutex>
+#include <thread>
 
 #include "stubs/helpers/ps2_stubs_helpers.inl"
 

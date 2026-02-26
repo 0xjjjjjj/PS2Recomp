@@ -28,8 +28,12 @@ static void waitWhileSuspended(const std::shared_ptr<ThreadInfo> &info)
         info->status = THS_SUSPEND;
         info->waitType = TSW_NONE;
         info->waitId = 0;
+        g_guest_exec_mutex.unlock();
         info->cv.wait(lock, [&]()
                       { return info->suspendCount == 0 || info->terminated.load(); });
+        lock.unlock();
+        g_guest_exec_mutex.lock();
+        lock.lock();
         if (info->terminated.load())
         {
             throw ThreadExitException();

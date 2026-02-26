@@ -66,6 +66,7 @@ void SifLoadModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
 void SifInitRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
+    std::cerr << "[SifInitRpc] called" << std::endl;
     std::lock_guard<std::mutex> lock(g_rpc_mutex);
     if (!g_rpc_initialized)
     {
@@ -893,16 +894,12 @@ void SifCallRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
 
     static int logCount = 0;
-    if (logCount < 10)
+    if (logCount < 32)
     {
-        std::cout << "[SifCallRpc] client=0x" << std::hex << clientPtr
-                  << " sid=0x" << sid
+        std::cerr << "[SifCallRpc] sid=0x" << std::hex << sid
                   << " rpcNum=0x" << rpcNum
                   << " mode=0x" << mode
-                  << " sendBuf=0x" << sendBuf
-                  << " recvBuf=0x" << recvBuf
-                  << " recvSize=0x" << recvSize
-                  << " size=" << std::dec << sendSize << std::endl;
+                  << std::dec << std::endl;
         ++logCount;
     }
 

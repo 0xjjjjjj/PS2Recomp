@@ -421,7 +421,10 @@ namespace
         const std::filesystem::path root = getCdRootPath();
         std::filesystem::path path = cdHostPath(ps2Path);
         std::error_code ec;
-        if (!std::filesystem::exists(path, ec) || ec || !std::filesystem::is_regular_file(path, ec))
+        const bool existsNow = std::filesystem::exists(path, ec) && !ec;
+        const bool isFile = existsNow && std::filesystem::is_regular_file(path, ec) && !ec;
+        const bool isDir  = existsNow && !isFile && std::filesystem::is_directory(path, ec) && !ec;
+        if (!isFile && !isDir)
         {
             const std::filesystem::path relative(normalizeCdPathNoPrefix(ps2Path));
             std::filesystem::path resolvedCasePath;
@@ -448,11 +451,29 @@ namespace
             }
         }
 
-        const uint64_t sizeBytes = std::filesystem::file_size(path, ec);
-        if (ec)
+        // For directories, use a synthetic size (ISO9660 directory record size).
+        // For files, use the actual file size on the host.
+        uint64_t sizeBytes = 0;
+        if (std::filesystem::is_directory(path, ec) && !ec)
         {
-            g_lastCdError = -1;
-            return false;
+            // Count directory entries to estimate ISO9660 directory record size.
+            // Each entry is ~34 + name_len bytes; use 2048 as a minimum (one sector).
+            uint64_t dirSize = 0;
+            for (auto &de : std::filesystem::directory_iterator(path, ec))
+            {
+                (void)de;
+                dirSize += 64; // rough average directory record size
+            }
+            sizeBytes = std::max<uint64_t>(dirSize, kCdSectorSize);
+        }
+        else
+        {
+            sizeBytes = std::filesystem::file_size(path, ec);
+            if (ec)
+            {
+                g_lastCdError = -1;
+                return false;
+            }
         }
 
         CdFileEntry entry;
@@ -1445,7 +1466,9 @@ namespace
 
         // DMA completes instantly in this runtime — dispatch registered DMAC
         // interrupt handlers so the engine's completion semaphore gets signaled.
-        ps2_syscalls::dispatchDmacForChannel(rdram, runtime, channelBase);
+        {
+            ps2_syscalls::dispatchDmacForChannel(rdram, runtime, channelBase);
+        }
 
         return 0;
     }

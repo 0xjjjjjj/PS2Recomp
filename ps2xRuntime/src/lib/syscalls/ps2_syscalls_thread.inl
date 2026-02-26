@@ -45,6 +45,12 @@ static void runExitHandlersForThread(int tid, uint8_t *rdram, R5900Context *ctx,
 
 void FlushCache(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
+    static int fcLog = 0;
+    if (fcLog < 16)
+    {
+        std::cerr << "[FlushCache] pc=0x" << std::hex << ctx->pc << std::dec << std::endl;
+        ++fcLog;
+    }
     setReturnS32(ctx, KE_OK);
 }
 
@@ -340,6 +346,8 @@ void StartThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             bool exited = false;
             try
             {
+                // Acquire guest exec mutex — worker threads share rdram with main thread
+                g_guest_exec_mutex.lock();
                 uint32_t lastPc = 0xFFFFFFFFu;
                 uint32_t samePcCount = 0;
                 constexpr uint32_t kSamePcYieldMask = 0x3FFFu;
@@ -358,7 +366,10 @@ void StartThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
                         ++samePcCount;
                         if ((samePcCount & kSamePcYieldMask) == 0u)
                         {
+                            // Release mutex during yield so other threads can run
+                            g_guest_exec_mutex.unlock();
                             std::this_thread::yield();
+                            g_guest_exec_mutex.lock();
                         }
                         if ((samePcCount % kSamePcWarnInterval) == 0u)
                         {
@@ -376,6 +387,13 @@ void StartThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
                     PS2Runtime::RecompiledFunction step = runtime->lookupFunction(pc);
                     step(rdram, threadCtx, runtime);
+
+                    // Yield mutex after every dispatch so the main thread
+                    // and other workers get fair access.  Worker threads are
+                    // not performance-critical (keyboard, power-off, etc).
+                    g_guest_exec_mutex.unlock();
+                    std::this_thread::yield();
+                    g_guest_exec_mutex.lock();
                 }
             }
             catch (const ThreadExitException &)
@@ -386,6 +404,8 @@ void StartThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             {
                 std::cerr << "[StartThread] id=" << tid << " exception: " << e.what() << std::endl;
             }
+            // Always release the guest exec mutex when thread exits
+            g_guest_exec_mutex.unlock();
 
             if (!exited)
             {
@@ -567,8 +587,12 @@ void SuspendThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (tid == g_currentThreadId)
     {
         std::unique_lock<std::mutex> lock(info->m);
+        g_guest_exec_mutex.unlock();
         info->cv.wait(lock, [&]()
                       { return info->suspendCount == 0 || info->terminated.load(); });
+        lock.unlock();
+        g_guest_exec_mutex.lock();
+        lock.lock();
         if (info->terminated.load())
         {
             throw ThreadExitException();
@@ -695,8 +719,14 @@ void SleepThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         info->waitId = 0;
         info->forceRelease = false;
 
+        // Release guest exec mutex before blocking
+        g_guest_exec_mutex.unlock();
         info->cv.wait(lock, [&]()
                       { return info->wakeupCount > 0 || info->forceRelease.load() || info->terminated.load(); });
+        // Reacquire before resuming guest code
+        lock.unlock();
+        g_guest_exec_mutex.lock();
+        lock.lock();
 
         if (info->terminated.load())
         {
@@ -869,7 +899,6 @@ void ChangeThreadPriority(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime
 
 void RotateThreadReadyQueue(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    static int logCount = 0;
     int prio = static_cast<int>(getRegU32(ctx, 4));
     if (prio == 0)
     {
@@ -880,16 +909,16 @@ void RotateThreadReadyQueue(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runti
             prio = (current->currentPriority > 0) ? current->currentPriority : 1;
         }
     }
-    if (logCount < 16)
-    {
-        std::cout << "[RotateThreadReadyQueue] prio=" << prio << std::endl;
-        ++logCount;
-    }
     if (prio <= 0 || prio >= 128)
     {
         setReturnS32(ctx, KE_ILLEGAL_PRIORITY);
         return;
     }
+    // On real PS2, this reschedules threads at this priority level.
+    // Release guest exec mutex briefly to let other guest threads run.
+    g_guest_exec_mutex.unlock();
+    std::this_thread::yield();
+    g_guest_exec_mutex.lock();
     setReturnS32(ctx, KE_OK);
 }
 

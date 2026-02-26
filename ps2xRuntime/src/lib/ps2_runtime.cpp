@@ -66,7 +66,11 @@ namespace
     constexpr uint32_t kGuestHeapDefaultBase = 0x00100000u;
     constexpr uint32_t kGuestHeapDefaultAlignment = 16u;
     constexpr uint32_t kGuestHeapSafetyPad = 0x1000u;
-    constexpr uint32_t kGuestHeapHardLimit = 0x01F00000u;
+    constexpr uint32_t kGuestHeapHardLimit = PS2_RAM_SIZE;
+    // PS2 ELFs often have overlay/loadscreen sections at high addresses that the
+    // game intentionally overwrites with its heap after boot.  Gaps larger than
+    // this between consecutive PT_LOAD segments indicate such overlay sections.
+    constexpr uint32_t kSegmentGapThreshold = 0x100000u; // 1 MB
 
     constexpr uint32_t COP0_CAUSE_EXCCODE_MASK = 0x0000007Cu;
     constexpr uint32_t COP0_CAUSE_BD = 0x80000000u;
@@ -451,7 +455,15 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
 
         if (!scratch)
         {
-            maxLoadedRdramEnd = std::max(maxLoadedRdramEnd, static_cast<uint32_t>(segmentMemEnd));
+            const uint32_t segEnd = static_cast<uint32_t>(segmentMemEnd);
+            // Only extend heap-base marker when this segment is contiguous with
+            // the ones we already counted.  A large gap (> kSegmentGapThreshold)
+            // means this is an overlay / loadscreen section that the game will
+            // reclaim for its own heap after boot.
+            if (physAddr <= maxLoadedRdramEnd + kSegmentGapThreshold)
+            {
+                maxLoadedRdramEnd = std::max(maxLoadedRdramEnd, segEnd);
+            }
         }
 
         if (ph.flags & 0x1u) // PF_X
@@ -488,6 +500,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
                                    ? PS2_RAM_SIZE
                                    : (maxLoadedRdramEnd + kGuestHeapSafetyPad);
     const uint32_t suggestedHeapBase = alignGuestHeapValue(paddedEnd, kGuestHeapDefaultAlignment);
+
+    std::cerr << "[Heap] maxLoadedRdramEnd=0x" << std::hex << maxLoadedRdramEnd
+              << " suggestedHeapBase=0x" << suggestedHeapBase << std::dec << std::endl;
+
     {
         std::lock_guard<std::mutex> lock(m_guestHeapMutex);
         if (!m_guestHeapConfigured)
@@ -497,6 +513,9 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
             m_guestHeapBase = m_guestHeapSuggestedBase;
             m_guestHeapEnd = m_guestHeapSuggestedBase;
             m_guestHeapLimit = hardLimit;
+
+            std::cerr << "[Heap] base=0x" << std::hex << m_guestHeapBase
+                      << " limit=0x" << m_guestHeapLimit << std::dec << std::endl;
         }
     }
 
@@ -1004,7 +1023,15 @@ uint32_t PS2Runtime::guestMalloc(uint32_t size, uint32_t alignment)
 {
     std::lock_guard<std::mutex> lock(m_guestHeapMutex);
     ensureGuestHeapInitializedLocked();
-    return allocateGuestBlockLocked(size, alignment);
+    const uint32_t addr = allocateGuestBlockLocked(size, alignment);
+    static int mallocLog = 0;
+    if (mallocLog < 10)
+    {
+        std::cerr << "[guestMalloc] size=0x" << std::hex << size
+                  << " → addr=0x" << addr << std::dec << std::endl;
+        ++mallocLog;
+    }
+    return addr;
 }
 
 uint32_t PS2Runtime::guestCalloc(uint32_t count, uint32_t size, uint32_t alignment)
@@ -1301,8 +1328,10 @@ void PS2Runtime::Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
     {
         m_memory.write64(vaddr, value);
     }
-    catch (const std::exception &)
+    catch (const std::exception &e)
     {
+        std::cerr << "[Store64] EXCEPTION at addr 0x" << std::hex << vaddr
+                  << ": " << e.what() << std::dec << std::endl;
         SignalException(ctx, EXCEPTION_ADDRESS_ERROR_STORE);
     }
 }

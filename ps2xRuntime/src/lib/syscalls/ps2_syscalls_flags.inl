@@ -231,6 +231,15 @@ void SignalSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         return;
     }
 
+    {
+        static int sigLog = 0;
+        if (sigLog < 200)
+        {
+            std::cerr << "[SignalSema] sema=" << sid << std::endl;
+            ++sigLog;
+        }
+    }
+
     int ret = KE_OK;
     {
         std::lock_guard<std::mutex> lock(sema->m);
@@ -270,6 +279,14 @@ void WaitSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
     if (sema->count == 0)
     {
+        static int wsLog = 0;
+        if (wsLog < 200)
+        {
+            std::cerr << "[WaitSema] BLOCK sema=" << sid
+                      << " pc=0x" << std::hex << ctx->pc << std::dec << std::endl;
+            ++wsLog;
+        }
+
         if (info)
         {
             std::lock_guard<std::mutex> tLock(info->m);
@@ -280,13 +297,74 @@ void WaitSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         }
 
         sema->waiters++;
-        sema->cv.wait(lock, [&]()
-                      {
-                          bool forced = info ? info->forceRelease.load() : false;
-                          bool terminated = info ? info->terminated.load() : false;
-                          return sema->count > 0 || sema->deleted || forced || terminated; //
-                      });
+
+        const bool mainThread = isMainThread();
+
+        if (!mainThread)
+        {
+            // Worker threads: block on the sema CV — removes them from
+            // guest exec mutex contention entirely.  This is the same
+            // pattern used by SleepThread and WaitEventFlag.
+            g_guest_exec_mutex.unlock();
+            sema->cv.wait(lock, [&]()
+                          {
+                              bool forced = info ? info->forceRelease.load() : false;
+                              bool terminated = info ? info->terminated.load() : false;
+                              return sema->count > 0 || sema->deleted || forced || terminated;
+                          });
+            // lock is still held after wait
+            lock.unlock();
+            g_guest_exec_mutex.lock();
+            lock.lock();
+        }
+        else
+        {
+            // Main thread: cooperative poll loop with VBlank dispatch.
+            // Must poll VBlank inline because INTC handlers signal
+            // frame-sync semas (circular dependency).
+            lock.unlock();
+
+            uint32_t loopIter = 0;
+            while (true)
+            {
+                pollVBlankInline(rdram, runtime);
+
+                lock.lock();
+                {
+                    bool forced = info ? info->forceRelease.load() : false;
+                    bool terminated = info ? info->terminated.load() : false;
+                    if (sema->count > 0 || sema->deleted || forced || terminated)
+                        break; // lock held on exit
+                }
+                lock.unlock();
+
+                ++loopIter;
+                if (loopIter <= 5 || loopIter == 100 || (loopIter % 10000) == 0)
+                {
+                    std::cerr << "[WaitSema:main] sema=" << sid
+                              << " iter=" << loopIter
+                              << " count=" << sema->count
+                              << " pending=" << g_vblank_pending.load() << std::endl;
+                }
+
+                // Brief sleep — no mutex contention since workers are
+                // blocked on CVs, not competing for the mutex.
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+
         sema->waiters--;
+
+        {
+            static int wakeLog = 0;
+            if (wakeLog < 200)
+            {
+                std::cerr << "[WaitSema] WAKE sema=" << sid
+                          << " pc=0x" << std::hex << ctx->pc << std::dec << std::endl;
+                ++wakeLog;
+            }
+        }
+
         if (sema->deleted)
         {
             ret = KE_WAIT_DELETE;
@@ -561,8 +639,12 @@ void WaitEventFlag(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         }
 
         info->waiters++;
+        g_guest_exec_mutex.unlock();
         info->cv.wait(lock, satisfied);
         info->waiters--;
+        lock.unlock();
+        g_guest_exec_mutex.lock();
+        lock.lock();
 
         if (tInfo)
         {

@@ -482,6 +482,39 @@ void sprintf(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     setReturnS32(ctx, ret);
 }
 
+// strtod: parse double from string. Native stub replaces 8000-line recompiled newlib _strtod_r.
+// PS2 MIPS o32 ABI: double returned in $v0:$v1 pair.
+void strtod(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    uint32_t str_addr = getRegU32(ctx, 4);    // $a0 = string
+    uint32_t endp_addr = getRegU32(ctx, 5);   // $a1 = char** endptr (or 0)
+
+    const std::string str = readPs2CStringBounded(rdram, runtime, str_addr, 256);
+    char *endp = nullptr;
+    double result = std::strtod(str.c_str(), &endp);
+
+    // Return double in $v0:$v1 (MIPS o32 convention)
+    uint64_t bits;
+    std::memcpy(&bits, &result, sizeof(bits));
+    setReturnU64(ctx, bits); // sets $v0 = full 64-bit, $v1 = high 32
+
+    // Also set $f0 in case the ABI returns via FPU register
+    float fResult = static_cast<float>(result);
+    std::memcpy(&ctx->f[0], &fResult, sizeof(float));
+
+    // Write endptr if requested
+    if (endp_addr != 0 && endp != nullptr)
+    {
+        uint32_t consumed = static_cast<uint32_t>(endp - str.c_str());
+        uint32_t guestEnd = str_addr + consumed;
+        uint8_t *ptr = getMemPtr(rdram, endp_addr);
+        if (ptr)
+        {
+            std::memcpy(ptr, &guestEnd, sizeof(uint32_t));
+        }
+    }
+}
+
 void snprintf(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     uint32_t str_addr = getRegU32(ctx, 4);    // $a0

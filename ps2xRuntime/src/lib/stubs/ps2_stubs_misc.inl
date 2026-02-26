@@ -881,54 +881,103 @@ void sceLseek(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     ps2_syscalls::fioLseek(rdram, ctx, runtime);
 }
 
+// --- MC async simulation ---
+// PS2 MC API is async: command stubs start an operation (return 0),
+// sceMcSync returns 1 (running) once, then 0 (idle) with result.
+// The MCA state machine requires seeing the running→idle transition
+// so that serviceResult fires and writes the completion state.
+// Without this, MCA_Sync spin-loops forever.
+
+// MC function codes (PS2 SDK)
+enum {
+    sceMcFuncNoFunc = 0,
+    sceMcFuncGetInfo = 1,
+    sceMcFuncOpen = 2,
+    sceMcFuncClose = 3,
+    sceMcFuncRead = 4,
+    sceMcFuncWrite = 5,
+    sceMcFuncSeek = 6,
+    sceMcFuncGetDir = 7,
+    sceMcFuncSetFileInfo = 8,
+    sceMcFuncDelete = 9,
+    sceMcFuncFormat = 10,
+    sceMcFuncUnformat = 11,
+    sceMcFuncGetEntSpace = 12,
+    sceMcFuncRename = 13,
+    sceMcFuncChdir = 14,
+    sceMcFuncChangeThreadPriority = 15,
+};
+
+static int g_mcCommandCode = sceMcFuncNoFunc;
+static int g_mcLastResult = 0;
+
+static void mcStartCommand(int funcCode)
+{
+    g_mcCommandCode = funcCode;
+    g_mcLastResult = 0; // success by default
+}
+
 void sceMcChangeThreadPriority(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcChangeThreadPriority", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncChangeThreadPriority);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcChdir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcChdir", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncChdir);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcClose(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcClose", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncClose);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcDelete(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcDelete", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncDelete);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcFlush(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcFlush", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncNoFunc);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcFormat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcFormat", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncFormat);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcGetDir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcGetDir", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncGetDir);
+    g_mcLastResult = 0; // 0 entries found
+    setReturnS32(ctx, 0);
 }
 
 void sceMcGetEntSpace(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcGetEntSpace", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncGetEntSpace);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcGetInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcGetInfo", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncGetInfo);
+    // Result will be sceMcResNoFormat or similar — no card / unformatted
+    g_mcLastResult = -1; // sceMcResNoFormat
+    setReturnS32(ctx, 0);
 }
 
 void sceMcGetSlotMax(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcGetSlotMax", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncNoFunc);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -939,52 +988,112 @@ void sceMcInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         std::cout << "ps2_stub sceMcInit -> 0" << std::endl;
         ++logCount;
     }
+    // On real PS2, sceMcInit starts an async device probe.
+    // sceMcSync returns "running" (1) until the probe completes.
+    // MCA_Process only enters its dispatch section when sceMcSync
+    // returns "running" — so we must seed the pending state here.
+    mcStartCommand(sceMcFuncGetInfo);
     setReturnS32(ctx, 0);
 }
 
 void sceMcMkdir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcMkdir", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncNoFunc);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcOpen", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncOpen);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcRead", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncRead);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcRename(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcRename", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncRename);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcSeek(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcSeek", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncSeek);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcSetFileInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcSetFileInfo", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncSetFileInfo);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcSync(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcSync", rdram, ctx, runtime);
+    // sceMcSync(int mode, int *cmd, int *result)
+    //
+    // MCA_Process ONLY enters its dispatch section when sceMcSync returns
+    // "running" (1), making $s1=SLTU(1,1)=0. When $s1=0 AND queue is empty,
+    // MCA_Process returns 0, which makes MCA_Sync exit its spin loop.
+    // If sceMcSync returns "idle" (0), $s1=1, MCA_Process always returns 1,
+    // and MCA_Sync loops forever.
+    //
+    // Fix: always return 1 for non-blocking polls (mode=1).
+    // This lets MCA_Process dispatch queued commands, drain the queue,
+    // and return 0 to exit MCA_Sync.
+    uint32_t mode = getRegU32(ctx, 4);
+    uint32_t cmdAddr = getRegU32(ctx, 5);
+    uint32_t resultAddr = getRegU32(ctx, 6);
+
+    static int mcSyncCalls = 0;
+    ++mcSyncCalls;
+    if (mcSyncCalls <= 8 || (mcSyncCalls % 500) == 0)
+    {
+        std::cerr << "[sceMcSync] #" << mcSyncCalls
+                  << " mode=" << mode
+                  << " cmd=" << g_mcCommandCode
+                  << " result=" << g_mcLastResult
+                  << " ret=" << (mode == 1 ? 1 : 0) << std::endl;
+    }
+
+    // Write cmd/result to output pointers (serviceResult reads these)
+    if (cmdAddr != 0)
+    {
+        uint8_t *ptr = getMemPtr(rdram, cmdAddr);
+        if (ptr) { *reinterpret_cast<int32_t *>(ptr) = g_mcCommandCode; }
+    }
+    if (resultAddr != 0)
+    {
+        uint8_t *ptr = getMemPtr(rdram, resultAddr);
+        if (ptr) { *reinterpret_cast<int32_t *>(ptr) = g_mcLastResult; }
+    }
+
+    if (mode == 1)
+    {
+        // Non-blocking poll: always say "running" so MCA_Process can dispatch
+        setReturnS32(ctx, 1); // sceMcExecRun
+    }
+    else
+    {
+        // Blocking wait (mode=0): return idle immediately
+        setReturnS32(ctx, 0); // sceMcExecIdle
+    }
 }
 
 void sceMcUnformat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcUnformat", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncUnformat);
+    setReturnS32(ctx, 0);
 }
 
 void sceMcWrite(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    TODO_NAMED("sceMcWrite", rdram, ctx, runtime);
+    mcStartCommand(sceMcFuncWrite);
+    setReturnS32(ctx, 0);
 }
 
 void sceMpegAddBs(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

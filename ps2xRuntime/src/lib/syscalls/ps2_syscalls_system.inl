@@ -250,11 +250,14 @@ void TODO(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t encod
 }
 
 // 0x3C SetupThread: returns stack pointer (stack + stack_size)
-// args: $a0 = stack base, $a1 = stack size, $a2 = gp, $a3 = entry point
+// PS2 EE kernel convention:
+//   $a0 = gp value, $a1 = stack base, $a2 = stack size,
+//   $a3 = args, $t0 = root function
 void SetupThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    uint32_t stackBase = getRegU32(ctx, 4);
-    uint32_t stackSize = getRegU32(ctx, 5);
+    uint32_t gp        = getRegU32(ctx, 4);  // $a0 = gp (ignored, already set)
+    uint32_t stackBase = getRegU32(ctx, 5);  // $a1 = stack base
+    uint32_t stackSize = getRegU32(ctx, 6);  // $a2 = stack size
     uint32_t sp = stackBase + stackSize;
     setReturnS32(ctx, sp);
 }

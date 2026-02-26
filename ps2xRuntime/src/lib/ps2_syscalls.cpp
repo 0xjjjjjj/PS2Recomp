@@ -3,6 +3,11 @@
 #include "ps2_runtime_macros.h"
 #include "ps2_stubs.h"
 #include <iostream>
+
+// Global DMAC memory watchpoint — set by instrumented recompiled code
+uint32_t g_dmacWatchAddr = 0;
+uint64_t g_dmacWatchVal = 0;
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -322,9 +327,12 @@ namespace ps2_syscalls
         }
         if (cause == UINT32_MAX)
         {
+            std::cerr << "[dispatchDmac] unknown channelBase=0x" << std::hex << channelBase << std::dec << std::endl;
             return;
         }
 
+        std::cerr << "[dispatchDmac] channelBase=0x" << std::hex << channelBase
+                  << " cause=" << std::dec << cause << std::endl;
         dispatchDmacHandlersForCause(rdram, runtime, cause);
     }
 
@@ -408,5 +416,27 @@ namespace ps2_syscalls
             g_alarms.clear();
         }
         g_alarm_cv.notify_all();
+    }
+
+    void pollVBlank(uint8_t *rdram, PS2Runtime *runtime)
+    {
+        pollVBlankInline(rdram, runtime);
+    }
+
+    static std::thread::id g_main_thread_id{};
+
+    void setMainThread()
+    {
+        g_main_thread_id = std::this_thread::get_id();
+    }
+
+    bool isMainThread()
+    {
+        return std::this_thread::get_id() == g_main_thread_id;
+    }
+
+    std::mutex& getGuestExecMutex()
+    {
+        return g_guest_exec_mutex;
     }
 }
